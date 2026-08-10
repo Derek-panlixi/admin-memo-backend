@@ -138,7 +138,7 @@ app.get('/api/sync', authMiddleware, (req, res) => {
 
 // Sync: POST user data
 app.post('/api/sync', authMiddleware, (req, res) => {
-  const { tasks, theme, bg, overlay, glassAlpha, glassBlur, wecomWebhook, lastModified } = req.body;
+  const { tasks, archivedTasks, theme, bg, overlay, glassAlpha, glassBlur, wecomWebhook, pushTime, lastModified } = req.body;
   const userFile = `user_${req.username}.json`;
   const existing = readJSON(userFile) || {};
 
@@ -152,12 +152,14 @@ app.post('/api/sync', authMiddleware, (req, res) => {
 
   const newData = {
     tasks: tasks !== undefined ? tasks : (existing.tasks || []),
+    archivedTasks: archivedTasks !== undefined ? archivedTasks : (existing.archivedTasks || []),
     theme: theme !== undefined ? theme : (existing.theme || ''),
     bg: bg !== undefined ? bg : (existing.bg || ''),
     overlay: overlay !== undefined ? overlay : (existing.overlay || ''),
     glassAlpha: glassAlpha !== undefined ? glassAlpha : (existing.glassAlpha || ''),
     glassBlur: glassBlur !== undefined ? glassBlur : (existing.glassBlur || ''),
     wecomWebhook: wecomWebhook !== undefined ? wecomWebhook : (existing.wecomWebhook || ''),
+    pushTime: pushTime !== undefined ? pushTime : (existing.pushTime || ''),
     lastModified: lastModified || new Date().toISOString(),
     syncedAt: new Date().toISOString()
   };
