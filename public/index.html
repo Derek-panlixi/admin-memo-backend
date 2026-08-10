@@ -855,6 +855,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
         <span>云同步</span>
       </button>
+      <button class="header-btn" onclick="openArchiveModal()" title="历史记录">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v5h5M3.05 13A9 9 0 1 0 6 5.3L3 8M12 7v5l4 2"/></svg>
+        <span>历史</span>
+      </button>
       <button class="header-btn" onclick="openThemeModal()" title="切换皮肤">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20M2 12h20"/></svg>
         <span>皮肤</span>
@@ -1206,6 +1210,31 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
   </div>
 </div>
 
+<!-- Archive Modal -->
+<div class="modal-overlay" id="archiveModal">
+  <div class="modal" style="max-width:680px;">
+    <div class="modal-header">
+      <h3>历史记录</h3>
+      <button class="modal-close" onclick="closeArchiveModal()">&times;</button>
+    </div>
+    <div class="modal-body" style="max-height:60vh; overflow-y:auto;">
+      <div style="margin-bottom:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input type="text" id="archiveSearch" placeholder="搜索任务名称/分类..." style="flex:1; min-width:200px; padding:8px 12px; border:1px solid var(--border); border-radius:8px; font-size:13px;" oninput="renderArchiveList()">
+        <select id="archiveFilter" style="padding:8px 12px; border:1px solid var(--border); border-radius:8px; font-size:13px;" onchange="renderArchiveList()">
+          <option value="all">全部</option>
+          <option value="deleted">已删除</option>
+          <option value="completed">已完成归档</option>
+        </select>
+        <span id="archiveCount" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
+      <div id="archiveList"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeArchiveModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ===== Constants =====
 var APP_PREFIX = 'wb_xzbwd_';
@@ -1337,6 +1366,7 @@ var cloudSyncing = false;
 var currentUser = null;
 function uk(suffix) { return APP_PREFIX + 'u_' + currentUser + '_' + suffix; }
 function getStorageKey() { return uk('tasks_v1'); }
+function getArchiveKey() { return uk('archive_v1'); }
 function getRemindedKey() { return uk('reminded_v1'); }
 function getThemeKey() { return uk('theme_v1'); }
 function getBgKey() { return uk('bg_v1'); }
@@ -1614,6 +1644,10 @@ function cloudPull(callback) {
           state.tasks = data.tasks;
           try { localStorage.setItem(getStorageKey(), JSON.stringify(data.tasks)); } catch(e) {}
         }
+        if (data.archivedTasks) {
+          state.archivedTasks = data.archivedTasks;
+          try { localStorage.setItem(getArchiveKey(), JSON.stringify(data.archivedTasks)); } catch(e) {}
+        }
         if (data.theme) {
           localStorage.setItem(getThemeKey(), data.theme);
           loadTheme();
@@ -1668,6 +1702,7 @@ function cloudPush() {
     },
     body: JSON.stringify({
       tasks: state.tasks,
+      archivedTasks: state.archivedTasks,
       theme: theme,
       bg: bg,
       overlay: overlay,
@@ -1718,6 +1753,7 @@ function updateSyncStatus(status) {
 // ===== State =====
 var state = {
   tasks: [],
+  archivedTasks: [],
   currentYear: 0,
   currentMonth: 0,
   selectedDate: '',
@@ -1888,11 +1924,19 @@ function loadData() {
     state.tasks = JSON.parse(JSON.stringify(SAMPLE_TASKS));
     saveData();
   }
+  // Load archived tasks
+  try {
+    var archRaw = localStorage.getItem(getArchiveKey());
+    state.archivedTasks = archRaw ? JSON.parse(archRaw) : [];
+  } catch (e) {
+    state.archivedTasks = [];
+  }
 }
 
 function saveData() {
   try {
     localStorage.setItem(getStorageKey(), JSON.stringify(state.tasks));
+    localStorage.setItem(getArchiveKey(), JSON.stringify(state.archivedTasks));
   } catch (e) {
     showToast('保存失败：存储空间不足', 'error');
   }
@@ -2418,13 +2462,114 @@ function editTask(taskId) {
 function deleteTask(taskId) {
   var task = findTask(taskId);
   if (!task) return;
-  showConfirm('确定要删除任务「' + task.name + '」吗？<br><span class="confirm-warning">此操作不可撤销，共 ' + task.timeNodes.length + ' 个时间节点将被删除。</span>', function() {
+  showConfirm('确定要删除任务「' + task.name + '」吗？<br><span class="confirm-warning">任务将移入历史记录，可随时恢复。共 ' + task.timeNodes.length + ' 个时间节点。</span>', function() {
+    // Move to archive instead of permanent delete
+    var archived = JSON.parse(JSON.stringify(task));
+    archived.archivedAt = new Date().toISOString();
+    archived.archivedReason = 'deleted';
+    state.archivedTasks.unshift(archived);
     state.tasks = state.tasks.filter(function(t) { return t.id !== taskId; });
     if (state.expandedTaskId === taskId) state.expandedTaskId = null;
     if (state.highlightedTaskId === taskId) state.highlightedTaskId = null;
     saveData();
     renderAll();
-    showToast('任务已删除', 'success');
+    showToast('已移入历史记录，可在「历史」中恢复', 'success');
+  });
+}
+
+// ===== Archive =====
+function openArchiveModal() {
+  document.getElementById('archiveSearch').value = '';
+  document.getElementById('archiveFilter').value = 'all';
+  document.getElementById('archiveModal').classList.add('show');
+  renderArchiveList();
+}
+
+function closeArchiveModal() {
+  document.getElementById('archiveModal').classList.remove('show');
+}
+
+function renderArchiveList() {
+  var keyword = (document.getElementById('archiveSearch').value || '').trim().toLowerCase();
+  var filter = document.getElementById('archiveFilter').value;
+  var list = state.archivedTasks.slice();
+
+  // Filter
+  if (filter === 'deleted') {
+    list = list.filter(function(t) { return t.archivedReason === 'deleted'; });
+  } else if (filter === 'completed') {
+    list = list.filter(function(t) { return t.archivedReason === 'completed'; });
+  }
+  if (keyword) {
+    list = list.filter(function(t) {
+      return (t.name || '').toLowerCase().indexOf(keyword) > -1 ||
+             (t.category || '').toLowerCase().indexOf(keyword) > -1;
+    });
+  }
+
+  document.getElementById('archiveCount').textContent = '共 ' + list.length + ' 条';
+
+  if (list.length === 0) {
+    document.getElementById('archiveList').innerHTML = '<div style="text-align:center; padding:40px 0; color:var(--text-light); font-size:14px;">暂无历史记录</div>';
+    return;
+  }
+
+  var html = '';
+  list.forEach(function(t) {
+    var archDate = t.archivedAt ? new Date(t.archivedAt).toLocaleString('zh-CN', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+    var nodeCount = (t.timeNodes || []).length;
+    var doneNodes = (t.timeNodes || []).filter(function(n) { return n.done; }).length;
+    var reasonLabel = t.archivedReason === 'completed' ? '已完成' : '已删除';
+    var reasonColor = t.archivedReason === 'completed' ? 'var(--success)' : 'var(--text-muted)';
+
+    html += '<div style="border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:8px;">';
+    html += '<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">';
+    html += '<div style="flex:1;">';
+    html += '<div style="font-weight:600; font-size:14px;">' + escapeHtml(t.name || '未命名') + '</div>';
+    html += '<div style="font-size:12px; color:var(--text-muted); margin-top:4px;">';
+    html += '<span style="color:' + reasonColor + ';">' + reasonLabel + '</span>';
+    if (t.category) html += ' · ' + escapeHtml(t.category);
+    html += ' · ' + doneNodes + '/' + nodeCount + ' 节点完成';
+    if (archDate) html += ' · 归档于 ' + archDate;
+    html += '</div>';
+    html += '</div>';
+    html += '<div style="display:flex; gap:4px; flex-shrink:0;">';
+    html += '<button class="header-btn" style="font-size:12px; padding:4px 10px;" onclick="restoreTask(\'' + t.id + '\')">恢复</button>';
+    html += '<button class="header-btn" style="font-size:12px; padding:4px 10px; color:var(--danger);" onclick="permanentlyDeleteTask(\'' + t.id + '\')">彻底删除</button>';
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+  });
+  document.getElementById('archiveList').innerHTML = html;
+}
+
+function restoreTask(taskId) {
+  var idx = state.archivedTasks.findIndex(function(t) { return t.id === taskId; });
+  if (idx === -1) return;
+  var task = state.archivedTasks[idx];
+  showConfirm('确定恢复任务「' + task.name + '」到任务列表吗？', function() {
+    // Remove archive-specific fields
+    var restored = JSON.parse(JSON.stringify(task));
+    delete restored.archivedAt;
+    delete restored.archivedReason;
+    state.tasks.push(restored);
+    state.archivedTasks.splice(idx, 1);
+    saveData();
+    renderAll();
+    renderArchiveList();
+    showToast('任务已恢复', 'success');
+  });
+}
+
+function permanentlyDeleteTask(taskId) {
+  var idx = state.archivedTasks.findIndex(function(t) { return t.id === taskId; });
+  if (idx === -1) return;
+  var task = state.archivedTasks[idx];
+  showConfirm('确定<strong>彻底删除</strong>任务「' + task.name + '」吗？<br><span class="confirm-warning">此操作不可撤销，任务将永久消失。</span>', function() {
+    state.archivedTasks.splice(idx, 1);
+    saveData();
+    renderArchiveList();
+    showToast('任务已彻底删除', 'success');
   });
 }
 
@@ -2695,10 +2840,11 @@ function confirmSmartPaste() {
 // ===== Export / Import =====
 function exportData() {
   var data = {
-    version: '2.0',
+    version: '2.1',
     exportedAt: new Date().toISOString(),
     user: currentUser,
-    tasks: state.tasks
+    tasks: state.tasks,
+    archivedTasks: state.archivedTasks
   };
   var jsonStr = JSON.stringify(data, null, 2);
   var d = new Date();
@@ -2745,6 +2891,10 @@ function handleImportFile(event) {
           if (!t.timeNodes) t.timeNodes = [];
           return t;
         });
+        // Also restore archived tasks if present
+        if (data.archivedTasks && Array.isArray(data.archivedTasks)) {
+          state.archivedTasks = data.archivedTasks;
+        }
         saveData();
         renderAll();
         showToast('数据已恢复', 'success');
