@@ -197,11 +197,11 @@ app.post('/api/test-webhook', async (req, res) => {
 });
 
 // Daily push — called by Render Cron Job
-// Secured by CRON_SECRET env var
+// Secured by CRON_SECRET (env var or hardcoded fallback)
+const CRON_SECRET = process.env.CRON_SECRET || 'memo2026daily';
 app.get('/api/cron/daily-push', async (req, res) => {
   const secret = req.query.secret || req.headers['x-cron-secret'];
-  const expected = process.env.CRON_SECRET;
-  if (!expected || secret !== expected) {
+  if (secret !== CRON_SECRET) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
