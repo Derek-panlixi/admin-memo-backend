@@ -177,8 +177,8 @@ app.post('/api/save-webhook', authMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 
-// Test webhook — proxy through backend to avoid CORS
-app.post('/api/test-webhook', authMiddleware, async (req, res) => {
+// Test webhook — proxy through backend to avoid CORS (no auth needed, just forwarding)
+app.post('/api/test-webhook', async (req, res) => {
   const { webhook, content } = req.body;
   if (!webhook) {
     return res.status(400).json({ error: 'Webhook 地址不能为空' });
