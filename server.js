@@ -177,6 +177,25 @@ app.post('/api/save-webhook', authMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 
+// Test webhook — proxy through backend to avoid CORS
+app.post('/api/test-webhook', authMiddleware, async (req, res) => {
+  const { webhook, content } = req.body;
+  if (!webhook) {
+    return res.status(400).json({ error: 'Webhook 地址不能为空' });
+  }
+  try {
+    const resp = await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ msgtype: 'markdown', markdown: { content: content || '## 测试消息\n\n行政备忘录测试推送成功！' } })
+    });
+    const r = await resp.json();
+    res.json(r);
+  } catch (e) {
+    res.status(502).json({ errcode: -1, errmsg: e.message });
+  }
+});
+
 // Daily push — called by Render Cron Job
 // Secured by CRON_SECRET env var
 app.get('/api/cron/daily-push', async (req, res) => {
