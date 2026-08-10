@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: admin-memo-backend
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_PERSIST
+        value: "true"
