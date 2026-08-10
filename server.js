@@ -137,7 +137,7 @@ app.get('/api/sync', authMiddleware, (req, res) => {
 
 // Sync: POST user data
 app.post('/api/sync', authMiddleware, (req, res) => {
-  const { tasks, theme, bg, overlay, glassAlpha, glassBlur, lastModified } = req.body;
+  const { tasks, theme, bg, overlay, glassAlpha, glassBlur, wecomWebhook, lastModified } = req.body;
   const userFile = `user_${req.username}.json`;
   const existing = readJSON(userFile) || {};
 
@@ -156,11 +156,97 @@ app.post('/api/sync', authMiddleware, (req, res) => {
     overlay: overlay !== undefined ? overlay : (existing.overlay || ''),
     glassAlpha: glassAlpha !== undefined ? glassAlpha : (existing.glassAlpha || ''),
     glassBlur: glassBlur !== undefined ? glassBlur : (existing.glassBlur || ''),
+    wecomWebhook: wecomWebhook !== undefined ? wecomWebhook : (existing.wecomWebhook || ''),
     lastModified: lastModified || new Date().toISOString(),
     syncedAt: new Date().toISOString()
   };
   writeJSON(userFile, newData);
   res.json({ ok: true, lastModified: newData.lastModified });
+});
+
+// ===== WeCom (企业微信) Webhook =====
+
+// Save webhook URL
+app.post('/api/save-webhook', authMiddleware, (req, res) => {
+  const { webhook } = req.body;
+  const userFile = `user_${req.username}.json`;
+  const data = readJSON(userFile) || {};
+  data.wecomWebhook = webhook || '';
+  data.lastModified = new Date().toISOString();
+  writeJSON(userFile, data);
+  res.json({ ok: true });
+});
+
+// Daily push — called by Render Cron Job
+// Secured by CRON_SECRET env var
+app.get('/api/cron/daily-push', async (req, res) => {
+  const secret = req.query.secret || req.headers['x-cron-secret'];
+  const expected = process.env.CRON_SECRET;
+  if (!expected || secret !== expected) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const users = readJSON('users.json') || {};
+  const results = [];
+
+  for (const username of Object.keys(users)) {
+    const userFile = `user_${username}.json`;
+    const data = readJSON(userFile);
+    if (!data || !data.wecomWebhook || !data.tasks) continue;
+
+    // Filter tasks due today or overdue
+    const urgentTasks = data.tasks.filter(t => {
+      const dueDate = (t.date || '').slice(0, 10);
+      if (!dueDate) return false;
+      if (t.done || t.completed) return false;
+      return dueDate <= today;
+    });
+
+    if (urgentTasks.length === 0) continue;
+
+    // Build markdown message
+    const overdueTasks = urgentTasks.filter(t => (t.date || '').slice(0, 10) < today);
+    const todayTasks = urgentTasks.filter(t => (t.date || '').slice(0, 10) === today);
+
+    let md = `## 📋 行政备忘录 · 今日待办\n`;
+    md += `> ${new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}\n\n`;
+
+    if (overdueTasks.length > 0) {
+      md += `### ⚠️ 逾期未完成（${overdueTasks.length}）\n`;
+      overdueTasks.slice(0, 5).forEach((t, i) => {
+        md += `> ${i + 1}. <font color="warning">${t.title || t.text || '未命名任务'}</font>\n`;
+      });
+      if (overdueTasks.length > 5) md += `> …还有 ${overdueTasks.length - 5} 项\n`;
+      md += '\n';
+    }
+
+    if (todayTasks.length > 0) {
+      md += `### 📌 今天要处理（${todayTasks.length}）\n`;
+      todayTasks.slice(0, 10).forEach((t, i) => {
+        const node = t.node || '';
+        md += `> ${i + 1}. ${t.title || t.text || '未命名任务'}${node ? ' 【' + node + '】' : ''}\n`;
+      });
+      if (todayTasks.length > 10) md += `> …还有 ${todayTasks.length - 10} 项\n`;
+    }
+
+    md += `\n[打开行政备忘录](https://67a18a7dff5e48c69feb58af28f2405a.gz4.agentos-app.net)`;
+
+    // Send via WeCom webhook
+    try {
+      const resp = await fetch(data.wecomWebhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ msgtype: 'markdown', markdown: { content: md } })
+      });
+      const r = await resp.json();
+      results.push({ username, tasks: urgentTasks.length, sent: r.errcode === 0, status: r.errmsg || 'ok' });
+    } catch (e) {
+      results.push({ username, tasks: urgentTasks.length, sent: false, status: e.message });
+    }
+  }
+
+  res.json({ ok: true, today, usersChecked: Object.keys(users).length, sent: results });
 });
 
 // Health check
