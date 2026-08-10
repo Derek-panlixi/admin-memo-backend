@@ -3,6 +3,7 @@ const cors = require('cors');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const cron = require('node-cron');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -196,16 +197,15 @@ app.post('/api/test-webhook', async (req, res) => {
   }
 });
 
-// Daily push — called by Render Cron Job
-// Secured by CRON_SECRET (env var or hardcoded fallback)
+// Daily push — core logic (shared by cron endpoint & built-in scheduler)
 const CRON_SECRET = process.env.CRON_SECRET || 'memo2026daily';
-app.get('/api/cron/daily-push', async (req, res) => {
-  const secret = req.query.secret || req.headers['x-cron-secret'];
-  if (secret !== CRON_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
 
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+async function executeDailyPush() {
+  // Use Beijing time (UTC+8)
+  const now = new Date();
+  const beijingOffset = 8 * 60 * 60 * 1000;
+  const beijingTime = new Date(now.getTime() + beijingOffset);
+  const today = beijingTime.toISOString().slice(0, 10); // YYYY-MM-DD in Beijing time
   const users = readJSON('users.json') || {};
   const results = [];
 
@@ -229,7 +229,7 @@ app.get('/api/cron/daily-push', async (req, res) => {
     const todayTasks = urgentTasks.filter(t => (t.date || '').slice(0, 10) === today);
 
     let md = `## 📋 行政备忘录 · 今日待办\n`;
-    md += `> ${new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}\n\n`;
+    md += `> ${beijingTime.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}\n\n`;
 
     if (overdueTasks.length > 0) {
       md += `### ⚠️ 逾期未完成（${overdueTasks.length}）\n`;
@@ -265,8 +265,67 @@ app.get('/api/cron/daily-push', async (req, res) => {
     }
   }
 
-  res.json({ ok: true, today, usersChecked: Object.keys(users).length, sent: results });
+  return { ok: true, today, usersChecked: Object.keys(users).length, sent: results };
+}
+
+// Manual trigger endpoint (secured)
+app.get('/api/cron/daily-push', async (req, res) => {
+  const secret = req.query.secret || req.headers['x-cron-secret'];
+  if (secret !== CRON_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const result = await executeDailyPush();
+  res.json(result);
 });
+
+// Set push time (authenticated)
+app.post('/api/set-push-time', authMiddleware, (req, res) => {
+  const { pushTime } = req.body;
+  const userFile = `user_${req.username}.json`;
+  const data = readJSON(userFile) || {};
+  data.pushTime = pushTime || '08:30';
+  data.lastModified = new Date().toISOString();
+  writeJSON(userFile, data);
+  res.json({ ok: true, pushTime: data.pushTime });
+});
+
+// Built-in scheduler — checks every minute, pushes at each user's preferred time
+const pushedToday = {}; // { username: 'YYYY-MM-DD' }
+cron.schedule('* * * * *', async () => {
+  const now = new Date();
+  const beijingOffset = 8 * 60 * 60 * 1000;
+  const beijingTime = new Date(now.getTime() + beijingOffset);
+  const todayStr = beijingTime.toISOString().slice(0, 10);
+  const currentHHMM = String(beijingTime.getUTCHours()).padStart(2, '0') + ':' + String(beijingTime.getUTCMinutes()).padStart(2, '0');
+
+  const users = readJSON('users.json') || {};
+  let needsPush = false;
+
+  for (const username of Object.keys(users)) {
+    const userFile = `user_${username}.json`;
+    const data = readJSON(userFile);
+    if (!data || !data.wecomWebhook) continue;
+
+    const pushTime = data.pushTime || '08:30';
+    if (pushTime === currentHHMM && pushedToday[username] !== todayStr) {
+      pushedToday[username] = todayStr;
+      needsPush = true;
+    }
+  }
+
+  if (needsPush) {
+    console.log(`[${beijingTime.toISOString()}] Running scheduled daily push at ${currentHHMM} Beijing time`);
+    const result = await executeDailyPush();
+    console.log('Push result:', JSON.stringify(result.sent));
+  }
+});
+
+// Self-ping every 10 minutes to reduce sleep (best-effort)
+setInterval(async () => {
+  try {
+    await fetch(`http://localhost:${PORT}/api/health`);
+  } catch (e) { /* ignore */ }
+}, 10 * 60 * 1000);
 
 // Health check
 app.get('/api/health', (req, res) => {
