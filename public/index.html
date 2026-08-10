@@ -1163,7 +1163,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
       <div style="margin-bottom:16px;">
         <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px;">服务器地址</label>
         <div style="display:flex; gap:8px;">
-          <input type="text" class="cloud-input" id="cloudApiInput" placeholder="https://your-server.com" style="flex:1;">
+          <input type="text" class="cloud-input" id="cloudApiInput" placeholder="https://admin-memo-backend.onrender.com" style="flex:1;">
           <button class="cloud-test-btn" onclick="testCloudConnection()">测试</button>
         </div>
         <div class="cloud-tip">
@@ -1172,9 +1172,30 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
           <strong>同一账号在手机和电脑上登录，数据自动同步。</strong>
         </div>
       </div>
+      <div style="margin-bottom:16px; padding-top:16px; border-top:1px solid var(--border);">
+        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px;">📱 企业微信通知 · 群机器人 Webhook</label>
+        <div style="display:flex; gap:8px;">
+          <input type="text" class="cloud-input" id="wecomWebhookInput" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." style="flex:1;">
+          <button class="cloud-test-btn" onclick="testWecomPush()">测试推送</button>
+        </div>
+        <div class="cloud-tip">
+          在企业微信群中添加「群机器人」，复制 Webhook 地址粘贴到此处。<br>
+          配置后，每天早上 8:30 自动推送当天待办事项到企业微信群。
+        </div>
+        <div id="wecomStatus" style="font-size:13px; padding:8px 0;"></div>
+        <div style="margin-top:4px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <button class="btn-secondary" onclick="saveWecomWebhook()" style="margin-right:8px;">保存 Webhook</button>
+          <button class="btn-secondary" onclick="clearWecomWebhook()" style="color:var(--danger);">取消关联</button>
+          <span style="font-size:12px; color:var(--text-muted); margin-left:auto;">推送时间</span>
+          <input type="time" id="pushTimeInput" value="08:30" style="padding:4px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+          <button class="cloud-test-btn" onclick="savePushTime()">保存时间</button>
+        </div>
+      </div>
       <div id="cloudStatus" style="font-size:13px; padding:8px 0;"></div>
+      <div id="cloudAccountStatus" style="font-size:13px; padding:8px 0;"></div>
       <div style="margin-top:12px;">
         <button class="btn-secondary" onclick="cloudSyncNow()" style="margin-right:8px;">立即同步</button>
+        <button class="btn-secondary" id="cloudLoginBtn" onclick="switchToCloudAccount()" style="margin-right:8px; display:none;">登录/注册云账号</button>
         <button class="btn-secondary" onclick="cloudClearSettings()" style="color:var(--danger);">关闭云同步</button>
       </div>
     </div>
@@ -1197,12 +1218,117 @@ var COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#06B6D4', 
 var CATEGORIES = ['课题申报', '会议安排', '材料审核', '学科建设', '研究生管理', '科研统计', '其他'];
 
 // Cloud sync config
-function getCloudApi() { return localStorage.getItem(CLOUD_API_KEY) || ''; }
+function getCloudApi() { return localStorage.getItem(CLOUD_API_KEY) || 'https://admin-memo-backend.onrender.com'; }
 function setCloudApi(url) { localStorage.setItem(CLOUD_API_KEY, url); }
 function getCloudToken() { return localStorage.getItem(CLOUD_TOKEN_KEY) || ''; }
 function setCloudToken(token) { if (token) localStorage.setItem(CLOUD_TOKEN_KEY, token); else localStorage.removeItem(CLOUD_TOKEN_KEY); }
 function getCloudLastSync() { return localStorage.getItem(CLOUD_LAST_SYNC_KEY) || ''; }
 function setCloudLastSync(ts) { localStorage.setItem(CLOUD_LAST_SYNC_KEY, ts); }
+
+// WeCom webhook config
+var WECOM_KEY = APP_PREFIX + 'wecom_webhook_v1';
+function getWecomWebhook() { return localStorage.getItem(WECOM_KEY) || ''; }
+function setWecomWebhook(url) { if (url) localStorage.setItem(WECOM_KEY, url); else localStorage.removeItem(WECOM_KEY); }
+
+function saveWecomWebhook() {
+  var url = document.getElementById('wecomWebhookInput').value.trim();
+  if (!url) { showToast('请先输入 Webhook 地址', 'error'); return; }
+  if (!url.startsWith('https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=')) {
+    showToast('Webhook 地址格式不正确，请从企业微信群机器人复制完整地址', 'error'); return;
+  }
+  setWecomWebhook(url);
+  syncWecomToCloud(url);
+  document.getElementById('wecomStatus').innerHTML = '<span style="color:var(--success);">企业微信通知已关联</span>';
+  showToast('Webhook 已保存', 'success');
+}
+
+function clearWecomWebhook() {
+  showConfirm('确认取消企业微信关联？取消后将不再收到每日待办推送。', function() {
+    setWecomWebhook('');
+    syncWecomToCloud('');
+    document.getElementById('wecomWebhookInput').value = '';
+    document.getElementById('wecomStatus').innerHTML = '<span style="color:var(--text-light);">已取消关联</span>';
+    showToast('已取消关联', 'success');
+  });
+}
+
+function syncWecomToCloud(webhook) {
+  var apiUrl = getCloudApi();
+  var token = getCloudToken();
+  if (!apiUrl || !token) return;
+  fetch(apiUrl + '/api/save-webhook', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({ webhook: webhook })
+  }).catch(function(e) { console.log('Sync webhook to cloud failed:', e); });
+}
+
+function savePushTime() {
+  var time = document.getElementById('pushTimeInput').value || '08:30';
+  localStorage.setItem(APP_PREFIX + 'u_' + currentUser + '_push_time', time);
+  var apiUrl = getCloudApi();
+  var token = getCloudToken();
+  if (apiUrl && token) {
+    fetch(apiUrl + '/api/set-push-time', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ pushTime: time })
+    }).then(function() { showToast('推送时间已设置为 ' + time, 'success'); })
+      .catch(function() { showToast('推送时间已保存到本地（云端同步失败）', 'warning'); });
+  } else {
+    showToast('推送时间已设置为 ' + time, 'success');
+  }
+}
+
+function loadPushTime() {
+  var saved = localStorage.getItem(APP_PREFIX + 'u_' + currentUser + '_push_time');
+  if (saved) document.getElementById('pushTimeInput').value = saved;
+}
+
+function testWecomPush() {
+  var webhook = document.getElementById('wecomWebhookInput').value.trim() || getWecomWebhook();
+  if (!webhook) { showToast('请先输入并保存 Webhook 地址', 'error'); return; }
+  var statusEl = document.getElementById('wecomStatus');
+  statusEl.innerHTML = '<span style="color:var(--primary);">发送测试消息中...</span>';
+
+  var today = new Date();
+  var dateStr = today.getFullYear() + '年' + (today.getMonth()+1) + '月' + today.getDate() + '日';
+  var weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+  var weekday = '星期' + weekdays[today.getDay()];
+
+  var md = '## 📋 行政备忘录 · 测试消息\n';
+  md += '> ' + dateStr + ' ' + weekday + '\n\n';
+  md += '企业微信通知已关联成功！\n';
+  md += '每天早上 8:30 将自动推送当天待办事项。\n\n';
+  md += '[打开行政备忘录](https://67a18a7dff5e48c69feb58af28f2405a.gz4.agentos-app.net)';
+
+  // Use backend proxy to avoid CORS — no auth required for test
+  var apiUrl = getCloudApi();
+  if (!apiUrl) {
+    statusEl.innerHTML = '<span style="color:var(--danger);">未配置后端地址</span>';
+    showToast('未配置后端地址', 'error');
+    return;
+  }
+
+  fetch(apiUrl + '/api/test-webhook', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ webhook: webhook, content: md })
+  }).then(function(res) { return res.json(); })
+    .then(function(r) {
+      if (r.errcode === 0) {
+        statusEl.innerHTML = '<span style="color:var(--success);">测试消息已发送，请查看企业微信群</span>';
+        showToast('测试推送成功', 'success');
+      } else {
+        statusEl.innerHTML = '<span style="color:var(--danger);">发送失败: ' + (r.errmsg || '未知错误') + '</span>';
+        showToast('推送失败: ' + (r.errmsg || '未知错误'), 'error');
+      }
+    })
+    .catch(function(e) {
+      statusEl.innerHTML = '<span style="color:var(--danger);">网络错误: ' + e.message + '</span>';
+      showToast('推送失败，请检查网络或后端服务', 'error');
+    });
+}
 
 var cloudSyncTimer = null;
 var cloudSyncing = false;
@@ -1351,7 +1477,9 @@ function doRegister() {
         users[username] = { password: hashPassword(password), createdAt: new Date().toISOString() };
         saveUsers(users);
         setSession(username);
-        localStorage.setItem(getStorageKey(), JSON.stringify(SAMPLE_TASKS));
+        if (!localStorage.getItem(getStorageKey())) {
+          localStorage.setItem(getStorageKey(), JSON.stringify(SAMPLE_TASKS));
+        }
         enterApp(true);
         showToast('注册成功，欢迎使用行政备忘录', 'success');
       });
@@ -1362,7 +1490,9 @@ function doRegister() {
         users[username] = { password: hashPassword(password), createdAt: new Date().toISOString() };
         saveUsers(users);
         setSession(username);
-        localStorage.setItem(getStorageKey(), JSON.stringify(SAMPLE_TASKS));
+        if (!localStorage.getItem(getStorageKey())) {
+          localStorage.setItem(getStorageKey(), JSON.stringify(SAMPLE_TASKS));
+        }
         enterApp(false);
         showToast('注册成功（本地模式，云端未连接）', 'success');
       } else {
@@ -1376,7 +1506,9 @@ function doRegister() {
     users[username] = { password: hashPassword(password), createdAt: new Date().toISOString() };
     saveUsers(users);
     setSession(username);
-    localStorage.setItem(getStorageKey(), JSON.stringify(SAMPLE_TASKS));
+    if (!localStorage.getItem(getStorageKey())) {
+      localStorage.setItem(getStorageKey(), JSON.stringify(SAMPLE_TASKS));
+    }
     enterApp(false);
     showToast('注册成功，欢迎使用行政备忘录', 'success');
   }
@@ -1486,12 +1618,17 @@ function cloudPull(callback) {
           localStorage.setItem(getThemeKey(), data.theme);
           loadTheme();
         }
-        if (data.bg) {
-          localStorage.setItem(getBgKey(), data.bg);
-          localStorage.setItem(getOverlayKey(), data.overlay || '85');
-          localStorage.setItem(getGlassAlphaKey(), data.glassAlpha || '65');
-          localStorage.setItem(getGlassBlurKey(), data.glassBlur || '12');
+        if (data.bg || data.glassAlpha || data.glassBlur) {
+          if (data.bg) {
+            localStorage.setItem(getBgKey(), data.bg);
+            localStorage.setItem(getOverlayKey(), data.overlay || '85');
+          }
+          if (data.glassAlpha) localStorage.setItem(getGlassAlphaKey(), data.glassAlpha);
+          if (data.glassBlur) localStorage.setItem(getGlassBlurKey(), data.glassBlur);
           loadTheme();
+        }
+        if (data.wecomWebhook !== undefined) {
+          setWecomWebhook(data.wecomWebhook);
         }
         setCloudLastSync(cloudLast);
       }
@@ -1519,6 +1656,7 @@ function cloudPush() {
   var overlay = localStorage.getItem(getOverlayKey()) || '';
   var glassAlpha = localStorage.getItem(getGlassAlphaKey()) || '';
   var glassBlur = localStorage.getItem(getGlassBlurKey()) || '';
+  var wecomWebhook = getWecomWebhook();
 
   updateSyncStatus('syncing');
 
@@ -1535,6 +1673,7 @@ function cloudPush() {
       overlay: overlay,
       glassAlpha: glassAlpha,
       glassBlur: glassBlur,
+      wecomWebhook: wecomWebhook,
       lastModified: now
     })
   }).then(function(res) {
@@ -2669,13 +2808,42 @@ function showToast(message, type) {
 
 // ===== Cloud Settings =====
 function openCloudSettings() {
-  document.getElementById('cloudApiInput').value = getCloudApi();
+  var existing = getCloudApi();
+  document.getElementById('cloudApiInput').value = existing || 'https://admin-memo-backend.onrender.com';
   var statusEl = document.getElementById('cloudStatus');
+  var accountStatusEl = document.getElementById('cloudAccountStatus');
+  var loginBtn = document.getElementById('cloudLoginBtn');
   if (getCloudApi()) {
     statusEl.innerHTML = '<span style="color:var(--success);">云同步已配置</span>';
   } else {
     statusEl.innerHTML = '<span style="color:var(--text-light);">未配置，填写服务器地址后保存即可启用</span>';
   }
+  // Account status
+  if (getCloudApi() && currentUser) {
+    if (getCloudToken()) {
+      accountStatusEl.innerHTML = '<span style="color:var(--success);">云账号已登录：' + escapeHtml(currentUser) + '</span>';
+      loginBtn.style.display = 'none';
+    } else {
+      accountStatusEl.innerHTML = '<span style="color:var(--warning);">当前是本地账号：' + escapeHtml(currentUser) + '，尚未登录云端。登录/注册云账号后才能同步数据。</span>';
+      loginBtn.style.display = 'inline-flex';
+    }
+  } else {
+    accountStatusEl.innerHTML = '';
+    loginBtn.style.display = 'none';
+  }
+  // Load existing webhook
+  var wecomEl = document.getElementById('wecomWebhookInput');
+  var wecomStatusEl = document.getElementById('wecomStatus');
+  var savedWebhook = getWecomWebhook();
+  if (savedWebhook) {
+    wecomEl.value = savedWebhook;
+    wecomStatusEl.innerHTML = '<span style="color:var(--success);">企业微信通知已关联</span>';
+  } else {
+    wecomEl.value = '';
+    wecomStatusEl.innerHTML = '';
+  }
+  // Load push time
+  loadPushTime();
   document.getElementById('cloudModal').classList.add('show');
 }
 
@@ -2734,6 +2902,23 @@ function cloudClearSettings() {
   document.getElementById('syncStatus').style.display = 'none';
   showToast('云同步已关闭', 'success');
   closeCloudSettings();
+}
+
+function switchToCloudAccount() {
+  closeCloudSettings();
+  showConfirm('切换云账号需要先退出当前本地账号。<br><span class="confirm-warning">本地数据仍保留在浏览器中，登录云账号后可手动导出导入合并。</span>', function() {
+    // Clear cloud token and session, then show login overlay
+    setCloudToken('');
+    clearSession();
+    document.getElementById('syncStatus').style.display = 'none';
+    document.getElementById('userBadge').style.display = 'none';
+    document.getElementById('logoutBtn').style.display = 'none';
+    document.getElementById('loginOverlay').classList.remove('hide');
+    document.getElementById('loginUsername').value = '';
+    document.getElementById('loginPassword').value = '';
+    document.getElementById('loginError').textContent = '';
+    switchLoginTab('register');
+  });
 }
 
 // ===== Escape HTML =====
@@ -2829,6 +3014,7 @@ function applyTheme(themeId) {
     c.classList.toggle('active', c.getAttribute('data-theme-id') === themeId);
   });
   showToast('皮肤已切换', 'success');
+  cloudPushDebounced();
 }
 
 function handleBgUpload(event) {
@@ -2867,6 +3053,7 @@ function handleBgUpload(event) {
       preview.style.display = 'block';
       preview.style.backgroundImage = 'url("' + dataUrl + '")';
       showToast('背景已设置', 'success');
+      cloudPushDebounced();
     };
     img.src = e.target.result;
   };
@@ -2881,6 +3068,7 @@ function removeCustomBg() {
   document.body.style.removeProperty('--bg-overlay');
   document.getElementById('bgPreview').style.display = 'none';
   showToast('背景已清除', 'success');
+  cloudPushDebounced();
 }
 
 function updateOverlay(val) {
@@ -2890,6 +3078,7 @@ function updateOverlay(val) {
   if (bg) {
     document.body.style.setProperty('--bg-overlay', 'rgba(255,255,255,' + (parseInt(val) / 100) + ')');
   }
+  cloudPushDebounced();
 }
 
 function updateGlassAlpha(val) {
@@ -2897,6 +3086,7 @@ function updateGlassAlpha(val) {
   localStorage.setItem(getGlassAlphaKey(), val);
   var blur = document.getElementById('glassBlurSlider').value;
   applyGlassSettings(parseInt(val), parseInt(blur));
+  cloudPushDebounced();
 }
 
 function updateGlassBlur(val) {
@@ -2904,6 +3094,7 @@ function updateGlassBlur(val) {
   localStorage.setItem(getGlassBlurKey(), val);
   var alpha = document.getElementById('glassAlphaSlider').value;
   applyGlassSettings(parseInt(alpha), parseInt(val));
+  cloudPushDebounced();
 }
 
 function init() {
